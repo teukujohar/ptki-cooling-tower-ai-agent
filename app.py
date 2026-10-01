@@ -122,46 +122,88 @@ def analyze(row):
     }
 
 # ---------- Optional OpenAI reasoning ----------
+def get_secret(name, default=None):
+    """Read a secret from environment variables first, then Streamlit Secrets."""
+    value = os.getenv(name)
+    if value:
+        return value
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
 def ai_reasoning(row, result):
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = get_secret("OPENAI_API_KEY")
+    model = get_secret("OPENAI_MODEL", "gpt-5.6-luna")
+
     if not api_key:
         return (
-            "AI reasoning is not connected yet. The deterministic rule engine is active. "
-            "Set OPENAI_API_KEY to enable LLM reasoning.\n\n"
-            "Suggested reasoning based on rules:\n" +
-            "\n".join(f"- {a}" for a in result["actions"])
+            "AI reasoning is not connected yet.\n\n"
+            "The deterministic rule engine is active. "
+            "Add OPENAI_API_KEY in Streamlit Cloud → App settings → Secrets "
+            "to enable AI technical reasoning."
         )
 
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        prompt = f"""
-You are a water-treatment technical assistant. Analyze the following cooling-tower data.
-Do not invent site-specific limits. Clearly distinguish calculated facts, hypotheses,
-and recommended verification steps. Do not recommend changing chemical dosage blindly.
 
-DATA:
+        client = OpenAI(api_key=api_key)
+
+        findings_text = "\n".join(
+            f"- {severity}: {message}"
+            for severity, message in result["findings"]
+        ) or "- No rule-based abnormality detected."
+
+        prompt = f"""
+You are a technical assistant for cooling-water treatment engineers.
+
+Your job is to help an engineer interpret cooling-tower monitoring data.
+Do NOT invent customer-specific operating limits.
+Do NOT claim a root cause is certain when the data only supports a hypothesis.
+Do NOT instruct the operator to change chemical dosage blindly.
+Separate:
+1. measured/calculated facts,
+2. possible causes,
+3. verification steps,
+4. recommended follow-up.
+
+Use the engineering calculations supplied below.
+
+CUSTOMER DATA:
 {row.to_dict()}
 
-CALCULATED:
-Conductivity CoC={result['coc_conductivity']:.2f}
-Chloride CoC={result['coc_chloride']:.2f}
-Hardness CoC={result['coc_hardness']:.2f}
+CALCULATED CoC:
+- Conductivity CoC: {result['coc_conductivity']:.2f}
+- Chloride CoC: {result['coc_chloride']:.2f}
+- Hardness CoC: {result['coc_hardness']:.2f}
 
-RULE FINDINGS:
-{result['findings']}
+RULE-ENGINE FINDINGS:
+{findings_text}
 
-Return:
-1. Executive summary
-2. Evidence
-3. Possible causes (ranked by investigation priority, not certainty)
-4. Verification steps
-5. Recommended follow-up
+Return a concise technical report with these headings:
+
+### Executive Summary
+### Evidence
+### Possible Causes
+### Verification Steps
+### Recommended Follow-up
+
+Use practical language suitable for an engineer discussing the case with a customer.
 """
-        resp = client.responses.create(model="gpt-5.6-mini", input=prompt)
-        return resp.output_text
+
+        response = client.responses.create(
+            model=model,
+            input=prompt
+        )
+
+        return response.output_text
+
     except Exception as e:
-        return f"AI reasoning error: {e}"
+        return (
+            "The rule engine completed successfully, but AI reasoning failed.\n\n"
+            f"Error: {type(e).__name__}: {e}\n\n"
+            "Check the API key, model name, API billing/access, and Streamlit Secrets."
+        )
 
 # ---------- UI ----------
 st.title("💧 Cooling Tower AI Agent")
